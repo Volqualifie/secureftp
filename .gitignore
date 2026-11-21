@@ -1,0 +1,9 @@
+certs/*.pem
+certs/*.key
+certs/*.srl
+certs/*.csr
+server/storage/*
+server/config.yaml
+__pycache__/
+*.pyc
+.env
