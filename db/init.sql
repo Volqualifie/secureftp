@@ -1,0 +1,20 @@
+-- MySQL 首次启动时由 docker-entrypoint 自动执行（挂载到 /docker-entrypoint-initdb.d）
+CREATE TABLE IF NOT EXISTS users (
+  id            INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  username      VARCHAR(32)  NOT NULL UNIQUE,
+  password_hash VARCHAR(100) NOT NULL,
+  is_vip        TINYINT(1)   NOT NULL DEFAULT 0,
+  created_at    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS transfer_logs (
+  id        BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  user_id   INT UNSIGNED NOT NULL,
+  action    VARCHAR(16)  NOT NULL,
+  filename  VARCHAR(1024) NOT NULL,
+  size      BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  sha256    CHAR(64)     NULL,
+  status    VARCHAR(16)  NOT NULL,
+  created_at TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

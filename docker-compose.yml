@@ -1,0 +1,47 @@
+services:
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?请在 .env 中设置}
+      MYSQL_DATABASE: secureftp
+      MYSQL_USER: ftpuser
+      MYSQL_PASSWORD: ${FTP_DB_PASSWORD:?请在 .env 中设置}
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    # 不发布 3306：只有同一内部网络里的 ftp-server 能访问数据库
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  ftp-server:
+    build: .
+    image: secure-ftp-server:latest
+    restart: unless-stopped
+    depends_on:
+      mysql: {condition: service_healthy}
+    environment:
+      FTP_DB_PASSWORD: ${FTP_DB_PASSWORD:?请在 .env 中设置}
+    ports:
+      - "9443:9443"
+    volumes:
+      - ftp_storage:/data/storage          # 用户文件只能落在这个卷里
+      - ./certs:/certs:ro                  # 证书只读挂载
+    networks: [backend]
+    # ---- 访问控制 / 容器加固（实验要求：限制只能访问指定目录）----
+    read_only: true                        # 根文件系统只读，仅 /data/storage 与 /tmp 可写
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 512
+    mem_limit: 1g
+
+volumes:
+  mysql_data:
+  ftp_storage:
+networks:
+  backend:
