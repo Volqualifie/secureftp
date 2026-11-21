@@ -515,3 +515,52 @@ def test_client_disconnect_mid_download_does_not_break_server(certs, tmp_path):
         assert (await download(c2, "big.bin"))[1] == data     # 服务端状态干净，可正常再下载
         await c2.close()
     run(certs, tmp_path, sc)
+
+
+def test_download_expect_sha256_guards_resume(certs, tmp_path):
+    data = rnd(100_000)
+
+    async def sc(port, db):
+        c = await authed(port, certs)
+        await upload(c, "f.bin", data)
+
+        async def dl(meta_extra):
+            rid = next_id(c)
+            await write_packet(c.w, Packet(PacketType.DOWNLOAD_REQ, rid, {
+                "token": c.token, "path": "f.bin", "offset": 1000, **meta_extra}))
+            return await recv(c)
+
+        ok = await dl({"expect_sha256": sha(data)})               # 版本一致：允许续传
+        assert ok.meta["ok"] is True
+        while not ((await recv(c)).flags & Flags.LAST):
+            pass
+        bad = await dl({"expect_sha256": sha(b"another version")})  # 版本不一致：拒绝
+        assert bad.meta["ok"] is False and bad.meta["code"] == ErrorCode.CONFLICT
+        await c.close()
+    run(certs, tmp_path, sc)
+
+
+def test_download_cancel_frees_slot(certs, tmp_path):
+    data = rnd(3_000_000)
+
+    async def sc(port, db):
+        c = await authed(port, certs)
+        await upload(c, "big.bin", data)
+        rid = next_id(c)
+        await write_packet(c.w, Packet(PacketType.DOWNLOAD_REQ, rid,
+                                       {"token": c.token, "path": "big.bin"}))
+        assert (await recv(c)).meta["ok"] is True
+        await recv(c)                                           # 收到第一块
+        await write_packet(c.w, Packet(PacketType.FILE_DONE, rid, {"ok": False, "cancel": True}))
+        await asyncio.sleep(0.5)
+        # 名额只有 1 个：取消生效后才能开始新的传输
+        rid2 = next_id(c)
+        await write_packet(c.w, Packet(PacketType.UPLOAD_REQ, rid2, {
+            "token": c.token, "path": "n.txt", "size": 1, "sha256": sha(b"x")}))
+        while True:
+            p = await recv(c)
+            if p.type == PacketType.UPLOAD_RESP:                # 跳过取消前已在途的 FILE_DATA
+                break
+        assert p.meta["ok"] is True
+        await c.close()
+    run(certs, tmp_path, sc, max_concurrent_transfers=1)
