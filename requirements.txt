@@ -1,1 +1,10 @@
+<<<<<<< HEAD
 PySide6,PyMySQL,bcrypt,PyYAML,cryptography,pytest
+=======
+PySide6
+PyMySQL
+bcrypt
+PyYAML
+cryptography
+pytest
+>>>>>>> 82feacee4805821e27fe3e5e25cdd48c05f15a92
