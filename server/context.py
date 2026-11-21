@@ -12,3 +12,5 @@ class ServerContext:
             cfg.login_max_failures, cfg.login_window, cfg.login_lockout)
         # 注册要做 bcrypt（耗 CPU），限制单 IP 频率防止被拿来消耗服务器算力
         self.register_limiter = LoginRateLimiter(10, 3600, 600)
+        self.active_uploads = set()     # 正在被写入的目标路径，防止两个会话同时写同一文件
+        self.hash_cache = {}            # (path, mtime_ns, size) -> sha256，避免重复计算大文件哈希

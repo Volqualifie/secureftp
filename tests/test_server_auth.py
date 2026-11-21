@@ -107,6 +107,7 @@ class FakeDB:
     def __init__(self):
         self.users = {}
         self.get_calls = []
+        self.logs = []                  # 传输日志 (user_id, action, filename, size, sha256, status)
 
     async def create_user(self, username, password_hash):
         if username in self.users:
@@ -120,7 +121,7 @@ class FakeDB:
         return self.users.get(username)
 
     async def log_transfer(self, *a):
-        pass
+        self.logs.append(a)
 
 
 def make_cfg(certs, **over) -> Config:
@@ -297,7 +298,7 @@ def test_protected_request_needs_login_and_token(certs):
         r = await c.call(PacketType.CATALOG_REQ, {"path": "/", "token": "forged"})
         assert r.meta["code"] == ErrorCode.UNAUTHORIZED
         r = await c.call(PacketType.CATALOG_REQ, {"path": "/", "token": tok})
-        assert r.meta["code"] == ErrorCode.BAD_REQUEST                      # 通过认证；目录功能尚未实现
+        assert r.type == PacketType.CATALOG_RESP and r.meta["ok"] is True   # 通过认证
         await c.close()
     run_server(certs, sc)
 

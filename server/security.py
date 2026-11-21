@@ -111,3 +111,27 @@ def safe_join(root: str, user_dir: str, rel_path: str) -> str:
     if target != base and not target.startswith(base + os.sep):
         raise ValidationError("路径越界")
     return target
+
+
+_BAD_CHARS = set('<>:"|?*') | {chr(i) for i in range(32)}
+_WIN_RESERVED = {"CON", "PRN", "AUX", "NUL",
+                 *{f"COM{i}" for i in range(1, 10)}, *{f"LPT{i}" for i in range(1, 10)}}
+_INTERNAL_SUFFIXES = (".part", ".part.json")      # 上传临时文件，不允许用户直接访问
+
+
+def validate_rel_path(rel, allow_empty: bool = False) -> str:
+    """校验并规范化客户端给的相对路径，返回用 / 连接的规范形式。
+    在 safe_join 之前先做一轮"字面"检查：拒绝 ..、Windows 非法字符与保留名、内部临时文件名。
+    这样即使服务端运行在 Windows 上，也不会被 CON、NUL 之类的设备名或 a.txt. 之类的名字绕过。"""
+    if not isinstance(rel, str) or len(rel) > 1024 or "\x00" in rel:
+        raise ValidationError("非法路径")
+    parts = [p for p in rel.replace("\\", "/").split("/") if p not in ("", ".")]
+    if not parts and not allow_empty:
+        raise ValidationError("路径不能为空")
+    for p in parts:
+        if (p == ".." or len(p) > 200 or p.endswith((" ", "."))
+                or any(c in _BAD_CHARS for c in p)
+                or p.lower().endswith(_INTERNAL_SUFFIXES)
+                or p.split(".")[0].upper() in _WIN_RESERVED):
+            raise ValidationError("文件名或路径不合法")
+    return "/".join(parts)

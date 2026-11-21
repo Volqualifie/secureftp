@@ -24,6 +24,8 @@ class Config:
     tls_ca: str
     require_client_cert: bool
     db: dict
+    max_file_size: int = 4 * 1024 ** 3        # 单文件上限，默认 4 GiB
+    max_concurrent_transfers: int = 4         # 单连接同时进行的传输数
 
 
 def load_config(path: str) -> Config:
@@ -53,4 +55,6 @@ def load_config(path: str) -> Config:
         tls_ca=rel(t["ca"]),
         require_client_cert=bool(t.get("require_client_cert", False)),
         db=raw["database"],
+        max_file_size=int(s.get("max_file_size", 4 * 1024 ** 3)),
+        max_concurrent_transfers=int(s.get("max_concurrent_transfers", 4)),
     )
