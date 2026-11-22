@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.12.16-slim
 
 ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 # 非 root 用户：即使服务被攻破，也只能写 /data
