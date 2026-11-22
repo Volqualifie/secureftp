@@ -61,6 +61,10 @@ async def amain(config_path: str) -> None:
     server = await start_server(cfg, Database(cfg.db))
     addrs = ", ".join(str(s.getsockname()) for s in server.sockets)
     log.info("服务已启动，监听 %s (TLS, 客户端证书=%s)", addrs, cfg.require_client_cert)
+    def fmt(r):
+        return "不限速" if r <= 0 else f"{r / 1024:.0f} KiB/s"
+    log.info("带宽限速（上传和下载都生效）：普通用户 %s，VIP %s",
+             fmt(cfg.bandwidth_normal), fmt(cfg.bandwidth_vip))
     async with server:
         await server.serve_forever()
 

@@ -85,6 +85,7 @@ async def handle_login(session, pkt: Packet) -> None:
         "token": session.token,
         "username": user["username"],
         "is_vip": bool(user["is_vip"]),
+        "rate_limit": ctx.rate_for(user),        # 字节/秒，0 = 不限速
         "heartbeat_interval": ctx.cfg.heartbeat_interval,
     }))
 

@@ -219,6 +219,7 @@ class FTPClient:
         self.on_state = on_state            # on_state(state, detail)，在后台线程回调
         self.username = None
         self.is_vip = False
+        self.rate_limit = 0
         self.heartbeat_interval = 30
         self.reconnect_wait = 10.0          # 普通请求遇到断线时，最多等待自动重连多久
 
@@ -320,6 +321,7 @@ class FTPClient:
         self._token = resp.meta["token"]
         self.username = resp.meta.get("username")
         self.is_vip = bool(resp.meta.get("is_vip"))
+        self.rate_limit = int(resp.meta.get("rate_limit") or 0)
         self.heartbeat_interval = resp.meta.get("heartbeat_interval", 30)
         link.start_heartbeat(self.heartbeat_interval)
 
@@ -401,6 +403,24 @@ class FTPClient:
             from .errors import TransferError
             raise TransferError(r.meta.get("code"), r.meta.get("message", "目录请求失败"))
         return r.meta["entries"]
+
+    def delete(self, path: str) -> int:
+        """删除远程文件或文件夹，返回删除的文件个数。"""
+        r = self.request(PacketType.DELETE_REQ, {"path": path})
+        if not r.meta.get("ok"):
+            from .errors import TransferError
+            raise TransferError(r.meta.get("code"), r.meta.get("message", "删除失败"))
+        return int(r.meta.get("removed", 0))
+
+    def upgrade_vip(self) -> dict:
+        """开通会员（演示）。成功后本客户端的身份与限速立即更新。"""
+        r = self.request(PacketType.UPGRADE_REQ, {})
+        if not r.meta.get("ok"):
+            from .errors import TransferError
+            raise TransferError(r.meta.get("code"), r.meta.get("message", "开通失败"))
+        self.is_vip = True
+        self.rate_limit = int(r.meta.get("rate_limit") or 0)
+        return r.meta
 
     def close(self) -> None:
         self._closing.set()

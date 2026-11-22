@@ -64,6 +64,14 @@ class Database:
         finally:
             conn.close()
 
+    def _set_vip(self, user_id: int) -> None:
+        conn = self._connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE users SET is_vip = 1 WHERE id = %s", (user_id,))
+        finally:
+            conn.close()
+
     # ---- 异步接口（供 handlers 调用） ----
     async def create_user(self, username, password_hash):
         return await asyncio.to_thread(self._create_user, username, password_hash)
@@ -74,3 +82,6 @@ class Database:
     async def log_transfer(self, user_id, action, filename, size, sha256, status):
         return await asyncio.to_thread(
             self._log_transfer, user_id, action, filename, size, sha256, status)
+
+    async def set_vip(self, user_id):
+        return await asyncio.to_thread(self._set_vip, user_id)

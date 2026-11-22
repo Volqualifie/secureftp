@@ -48,6 +48,7 @@ def make_win(env, qapp):
     def make(srv=None, **kw):
         srv = srv or env.server()
         c = env.client(srv)
+        kw.setdefault("history_path", str(env.tmp / "history.json"))     # 不要写到真实的用户目录
         win = MainWindow(c, "alice@test", **kw)
         win._confirm = lambda *a, **k: True            # 测试里不弹确认框
         wins.append(win)
@@ -349,3 +350,96 @@ def test_screenshots(env, make_win, tmp_path):
     shot(win, "main_window.png", tmp_path)
     assert os.path.getsize(os.path.join(os.environ.get("GUI_SHOT_DIR") or str(tmp_path),
                                         "main_window.png")) > 5000
+
+
+def test_become_vip_from_toolbar(env, make_win):
+    srv = env.server(bandwidth_normal=600_000, bandwidth_vip=0)
+    win = make_win(srv)
+    assert "普通用户" in win.user_label.text() and win.act_vip.isEnabled()
+    asked = []
+    win._confirm = lambda t, m: asked.append(t) or False        # 先取消
+    win.act_vip.trigger()
+    assert asked == ["开通会员"] and not win.client.is_vip
+
+    win._confirm = lambda *a: True
+    win.act_vip.trigger()
+    assert wait(lambda: win.client.is_vip)
+    assert wait(lambda: "VIP 会员" in win.user_label.text())
+    assert "不限速" in win.user_label.text()
+    assert win.act_vip.text() == "已是会员" and not win.act_vip.isEnabled()
+
+
+# ------------------------------------------------------------- 历史记录 / 删除
+def test_history_survives_restart_and_can_resume(env, make_win):
+    srv = env.server()
+    win = make_win(srv)
+    data = rnd(80_000_000, 21)
+    small = rnd(50_000, 22)
+    t = win.manager.add_upload(env.local("big.bin", data), "big.bin")
+    win.manager.add_upload(env.local("small.bin", small), "small.bin")
+    win.manager.task_updated.connect(
+        lambda x: win.manager.pause(x) if x is t and x.state == RUNNING and x.done >= 5_000_000 else None)
+    assert wait(lambda: t.state == PAUSED, 30)
+    assert wait(lambda: any(x.name == "small.bin" and x.state == DONE for x in win.manager.tasks))
+    hist = win.history_path
+    win.close()                                              # 关闭客户端（模拟用户直接退出）
+    assert os.path.exists(hist)
+
+    win2 = make_win(srv, history_path=hist)                  # 重新打开 → 重新登录
+    by_name = {x.name: x for x in win2.manager.tasks}
+    assert set(by_name) == {"big.bin", "small.bin"}
+    assert by_name["small.bin"].state == DONE
+    big = by_name["big.bin"]
+    assert big.state == PAUSED and 0 < big.done < big.total   # 没有自动开始，由用户选择
+    row = win2.transfers._row(big)
+    assert "已暂停" in win2.transfers.item(row, 4).text()
+    assert win2.transfers.cellWidget(row, 2).value() > 0     # 进度条保留
+
+    win2.manager.resume(big)                                 # 用户点"继续"
+    assert wait(lambda: big.state == DONE, 60)
+    assert big.result["resumed_from"] > 0                    # 确实是从断点继续
+    assert read(env.remote_path("big.bin")) == data
+
+
+def test_history_removed_item_and_corrupt_file(env, make_win, tmp_path):
+    from client.ui.history import load_records
+    srv = env.server()
+    win = make_win(srv)
+    win.manager.add_upload(env.local("a.txt", b"a"), "a.txt")
+    assert wait(lambda: all_done(win, 1))
+    win.manager.remove(win.manager.tasks[0])
+    win.close()
+    assert load_records(win.history_path) == []              # 移除后不再出现在历史里
+
+    bad = tmp_path / "bad.json"
+    bad.write_text("{ not json", encoding="utf-8")
+    assert load_records(str(bad)) == []                      # 损坏的文件不会导致崩溃
+    win3 = make_win(srv, history_path=str(bad))
+    assert win3.manager.tasks == []
+
+
+def test_delete_files_and_folders_from_gui(env, make_win):
+    win = make_win()
+    sub = env.tmp / "local" / "dir1"
+    sub.mkdir(parents=True)
+    (sub / "x.txt").write_bytes(b"x")
+    win.upload_paths([env.local("keep.txt", b"k"), env.local("gone.txt", b"g"), str(sub)])
+    assert wait(lambda: all_done(win, 3) and win.files.rowCount() == 3)
+
+    win._confirm = lambda *a: False                          # 取消 → 不删
+    win.files.selectAll()
+    win.delete_selected()
+    QApplication.processEvents()
+    assert os.path.exists(env.remote_path("gone.txt"))
+
+    win._confirm = lambda *a: True
+    names = {e["name"]: i for i, e in enumerate(win._entries)}
+    win.files.clearSelection()
+    win.files.selectRow(names["gone.txt"])
+    win.files.selectRow(names["gone.txt"])
+    win.delete_entries([e for e in win._entries if e["name"] in ("gone.txt", "dir1")])
+    assert wait(lambda: win.files.rowCount() == 1)
+    assert [e["name"] for e in win._entries] == ["keep.txt"]
+    assert not os.path.exists(env.remote_path("gone.txt"))
+    assert not os.path.exists(env.remote_path("dir1"))
+    assert os.path.exists(env.remote_path("keep.txt"))

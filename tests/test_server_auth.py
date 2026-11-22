@@ -120,6 +120,11 @@ class FakeDB:
         self.get_calls.append(username)
         return self.users.get(username)
 
+    async def set_vip(self, user_id):
+        for u in self.users.values():
+            if u["id"] == user_id:
+                u["is_vip"] = 1
+
     async def log_transfer(self, *a):
         self.logs.append(a)
 

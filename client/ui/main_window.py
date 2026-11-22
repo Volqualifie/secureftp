@@ -15,7 +15,8 @@ from PySide6.QtWidgets import (
 )
 
 from ..transfer import list_remote_tree
-from .common import human_size, human_time, run_in_background
+from .common import human_size, human_speed, human_time, run_in_background
+from .history import default_history_path, load_records, save_records
 from .transfer_view import TransferTable
 from .transfers import DONE, RUNNING, WAITING, TransferManager
 
@@ -36,9 +37,10 @@ def normalize(path: str) -> str:
 class MainWindow(QMainWindow):
     state_changed = Signal(str, str)        # 网络线程 -> 界面线程
 
-    def __init__(self, client, server_label="", max_parallel=3, parent=None):
+    def __init__(self, client, server_label="", max_parallel=3, parent=None, history_path=None):
         super().__init__(parent)
         self.client = client
+        self.history_path = history_path or default_history_path(server_label or f"{client.host}:{client.port}")
         self.cwd = ""
         self._entries = []
         self._nav_seq = 0
@@ -64,6 +66,16 @@ class MainWindow(QMainWindow):
         self._refresh_timer = QTimer(self)
         self._refresh_timer.setSingleShot(True)
         self._refresh_timer.timeout.connect(lambda: self.navigate(self.cwd))
+
+        # 历史记录：先恢复上次的任务（不自动续传），之后每次变化都防抖保存
+        self.manager.restore(load_records(self.history_path))
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.setInterval(800)
+        self._save_timer.timeout.connect(self._save_history)
+        for sig in (self.manager.task_added, self.manager.task_removed, self.manager.task_done):
+            sig.connect(lambda *_: self._save_timer.start())
+        self.manager.task_updated.connect(self._on_updated_for_history)
 
         self._apply_state(client.state)
         self.navigate("")
@@ -93,12 +105,16 @@ class MainWindow(QMainWindow):
         self.act_up_dir = act(SP.SP_DirOpenIcon, "上传文件夹", self.choose_upload_dir)
         self.act_down = act(SP.SP_ArrowDown, "下载", self.download_selected, "Ctrl+D",
                             "下载选中的文件或文件夹")
+        self.act_delete = act(SP.SP_TrashIcon, "删除", self.delete_selected, "Delete",
+                              "删除选中的远程文件或文件夹（不可恢复）")
         tb.addSeparator()
         self.act_parent = act(SP.SP_FileDialogToParent, "上一级", self.go_parent, "Backspace")
         self.act_refresh = act(SP.SP_BrowserReload, "刷新", lambda: self.navigate(self.cwd), "F5")
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         tb.addWidget(spacer)
+        self.act_vip = act(SP.SP_DialogApplyButton, "开通会员", self.upgrade_vip, None,
+                           "开通会员后下载/上传速度上限更高（演示功能，无需支付）")
         self.act_drop = act(SP.SP_BrowserStop, "模拟断网", self.simulate_drop, None,
                             "主动断开 TCP 连接，用于演示自动重连与断点续传")
 
@@ -157,12 +173,49 @@ class MainWindow(QMainWindow):
         # 状态栏
         self.conn_label = QLabel()
         self.summary_label = QLabel("")
-        user = f"{self.client.username or ''}" + ("  [VIP]" if self.client.is_vip else "")
-        self.user_label = QLabel(user)
+        self.user_label = QLabel()
+        self._refresh_identity()
         sb = self.statusBar()
         sb.addWidget(self.conn_label)
         sb.addWidget(self.user_label)
         sb.addPermanentWidget(self.summary_label)
+
+    # ------------------------------------------------------------ 历史记录
+    def _save_history(self):
+        save_records(self.history_path, self.manager.to_records())
+
+    def _on_updated_for_history(self, t):
+        # 进度更新很频繁，只在状态变化时保存；运行中的进度每 ~0.8 秒顺带保存一次
+        if not self._save_timer.isActive():
+            self._save_timer.start()
+
+    # ------------------------------------------------------------ 会员身份
+    def _refresh_identity(self):
+        c = self.client
+        role = "VIP 会员" if c.is_vip else "普通用户"
+        speed = f"，速度上限 {human_speed(c.rate_limit)}" if c.rate_limit else "，不限速"
+        self.user_label.setText(f"{c.username or ''}（{role}{speed}）")
+        color = "#b8860b" if c.is_vip else "#555"
+        self.user_label.setStyleSheet(f"color: {color}; font-weight: bold; padding: 0 8px;")
+        self.act_vip.setText("已是会员" if c.is_vip else "开通会员")
+        self.act_vip.setEnabled(not c.is_vip and self._conn_state == "connected")
+
+    def upgrade_vip(self):
+        if self.client.is_vip:
+            return
+        if not self._confirm("开通会员", "开通后将提升传输速度上限（演示功能，不会产生任何费用）。\n确认开通吗？"):
+            return
+        self.act_vip.setEnabled(False)
+
+        def ok(_meta):
+            self._refresh_identity()
+            self.statusBar().showMessage("会员开通成功，正在进行的传输也会立即提速", 6000)
+
+        def err(e):
+            self._refresh_identity()
+            QMessageBox.warning(self, "开通失败", str(getattr(e, "message", e)))
+
+        run_in_background(self.client.upgrade_vip, ok, err)
 
     # ------------------------------------------------------------ 连接状态
     def _apply_state(self, state):
@@ -172,6 +225,10 @@ class MainWindow(QMainWindow):
         self.transfers.refresh_all(state == "connected")
         online = state == "connected"
         self.act_drop.setEnabled(online)
+        if hasattr(self, "act_delete"):
+            self.act_delete.setEnabled(online)
+        if hasattr(self, "user_label"):
+            self._refresh_identity()
 
     def _on_state(self, state, detail):
         prev, self._conn_state = self._conn_state, state
@@ -277,6 +334,47 @@ class MainWindow(QMainWindow):
         return len(jobs)
 
     # ------------------------------------------------------------ 下载
+    # ------------------------------------------------------------ 删除
+    def delete_selected(self):
+        entries = self._selected_entries()
+        if not entries:
+            self.statusBar().showMessage("请先在远程目录中选择要删除的文件或文件夹", 4000)
+            return
+        self.delete_entries(entries)
+
+    def delete_entries(self, entries, confirm=True):
+        names = [e["name"] for e in entries]
+        shown = "、".join(names[:3]) + (f" 等 {len(names)} 项" if len(names) > 3 else "")
+        has_dir = any(e["is_dir"] for e in entries)
+        if confirm and not self._confirm(
+                "删除确认",
+                f"将从服务器永久删除：{shown}" + ("\n（文件夹内的所有内容也会一并删除）" if has_dir else "")
+                + "\n此操作不可恢复，确定吗？"):
+            return False
+        remotes = [posixpath.join(self.cwd, n) for n in names]
+        self.act_delete.setEnabled(False)
+
+        def work():
+            errors = []
+            for r in remotes:
+                try:
+                    self.client.delete(r)
+                except Exception as e:      # noqa: BLE001  逐个删除，失败的汇总提示
+                    errors.append(f"{posixpath.basename(r)}：{getattr(e, 'message', e)}")
+            return errors
+
+        def done(errors):
+            self.act_delete.setEnabled(True)
+            if errors:
+                QMessageBox.warning(self, "部分删除失败", "\n".join(errors[:8]))
+            else:
+                self.statusBar().showMessage(f"已删除 {len(remotes)} 项", 5000)
+            self.navigate(self.cwd)
+
+        run_in_background(work, done, lambda e: (self.act_delete.setEnabled(True),
+                                                 self.statusBar().showMessage(f"删除失败：{e}", 8000)))
+        return True
+
     def download_selected(self):
         entries = self._selected_entries()
         if not entries:
@@ -351,6 +449,8 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         self.manager.shutdown()
+        self._save_timer.stop()
+        self._save_history()
         self.client.on_state = None
         self.client.close()
         event.accept()

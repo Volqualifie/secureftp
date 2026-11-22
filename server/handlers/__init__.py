@@ -2,8 +2,9 @@
 from protocol.constants import PacketType
 
 from .auth import handle_login, handle_register
+from .membership import handle_upgrade
 from .files import (
-    handle_catalog, handle_download_req, handle_file_data, handle_file_done,
+    handle_catalog, handle_delete, handle_download_req, handle_file_data, handle_file_done,
     handle_upload_req,
 )
 
@@ -28,4 +29,6 @@ HANDLERS = {
     PacketType.FILE_DATA: handle_file_data,
     PacketType.FILE_DONE: handle_file_done,
     PacketType.DOWNLOAD_REQ: handle_download_req,
+    PacketType.UPGRADE_REQ: handle_upgrade,
+    PacketType.DELETE_REQ: handle_delete,
 }

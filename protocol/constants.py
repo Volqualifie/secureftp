@@ -41,6 +41,10 @@ class PacketType:
     PONG = 0x0F
     ERROR = 0x10
     LOGOUT = 0x11
+    UPGRADE_REQ = 0x12      # 开通会员（模拟，无真实支付）
+    UPGRADE_RESP = 0x13
+    DELETE_REQ = 0x14       # 删除自己目录下的文件/文件夹
+    DELETE_RESP = 0x15
 
     NAMES = {}
 

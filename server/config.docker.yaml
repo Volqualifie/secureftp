@@ -12,6 +12,8 @@ server:
   login_lockout: 300
   max_file_size: 4294967296
   max_concurrent_transfers: 4
+  bandwidth_normal: 5242880     # 普通用户 5 MiB/s
+  bandwidth_vip: 0              # VIP 用户不限速（0 = 不限速）
 tls:
   cert: /certs/server-cert.pem
   key: /certs/server-key.pem

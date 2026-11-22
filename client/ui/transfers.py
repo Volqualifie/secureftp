@@ -100,6 +100,36 @@ class TransferManager(QObject):
     def add_download(self, remote, local, total=0):
         return self._add("download", remote, local, total)
 
+    # ---- 历史记录 ----
+    def restore(self, records):
+        """把上次保存的记录恢复成任务。未完成的一律置为"已暂停"，由用户决定是否继续。"""
+        for r in records:
+            t = TransferTask(self._next_id, r["direction"], r["remote"], r["local"],
+                             int(r.get("total") or 0))
+            self._next_id += 1
+            t.done = int(r.get("done") or 0)
+            state = r.get("state")
+            if state == DONE:
+                t.state, t.result = DONE, {"size": t.total, "resumed_from": int(r.get("resumed_from") or 0)}
+                t.done = t.total
+            elif state == FAILED:
+                t.state, t.error = FAILED, r.get("error") or "上次传输失败"
+            else:
+                t.state = PAUSED
+            t.progress_sig.connect(self._on_progress)
+            t.finished_sig.connect(self._on_finished)
+            self.tasks.append(t)
+            self.task_added.emit(t)
+
+    def to_records(self):
+        out = []
+        for t in self.tasks:
+            state = t.state if t.state in (DONE, FAILED) else PAUSED
+            out.append({"direction": t.direction, "remote": t.remote, "local": t.local,
+                        "total": t.total, "done": t.done, "state": state, "error": t.error,
+                        "resumed_from": int((t.result or {}).get("resumed_from", 0))})
+        return out
+
     # ---- 控制 ----
     def pause(self, t):
         if t.state == WAITING:

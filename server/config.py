@@ -5,6 +5,11 @@ from dataclasses import dataclass
 import yaml
 
 
+# 配置文件里没写时的默认限速：普通用户 5 MiB/s，VIP 不限速（0 = 不限速）
+DEFAULT_BW_NORMAL = 5 * 1024 * 1024
+DEFAULT_BW_VIP = 0
+
+
 @dataclass
 class Config:
     host: str
@@ -26,6 +31,8 @@ class Config:
     db: dict
     max_file_size: int = 4 * 1024 ** 3        # 单文件上限，默认 4 GiB
     max_concurrent_transfers: int = 4         # 单连接同时进行的传输数
+    bandwidth_normal: int = 0                 # 普通用户带宽上限（字节/秒），0 = 不限
+    bandwidth_vip: int = 0                    # VIP 用户带宽上限（字节/秒），0 = 不限
 
 
 def _db_with_env(db: dict) -> dict:
@@ -47,6 +54,9 @@ def load_config(path: str) -> Config:
         return p if os.path.isabs(p) else os.path.normpath(os.path.join(base, p))
 
     s, t = raw["server"], raw["tls"]
+    for k in ("bandwidth_normal", "bandwidth_vip"):
+        if int(s.get(k, 0)) < 0:
+            raise ValueError(f"{k} 不能为负数（0 表示不限速）")
     return Config(
         host=s["host"],
         port=int(s["port"]),
@@ -67,4 +77,6 @@ def load_config(path: str) -> Config:
         db=_db_with_env(raw["database"]),
         max_file_size=int(s.get("max_file_size", 4 * 1024 ** 3)),
         max_concurrent_transfers=int(s.get("max_concurrent_transfers", 4)),
+        bandwidth_normal=int(s.get("bandwidth_normal", DEFAULT_BW_NORMAL)),
+        bandwidth_vip=int(s.get("bandwidth_vip", DEFAULT_BW_VIP)),
     )

@@ -16,6 +16,7 @@ import asyncio
 import logging
 import os
 import re
+import shutil
 from dataclasses import dataclass
 
 from protocol.constants import ErrorCode, Flags, PacketType
@@ -173,6 +174,10 @@ async def handle_file_data(session, pkt: Packet) -> None:
                             keep_part=False)
         return
     if n:
+        limiter = session.ctx.limiter_for(session.user)
+        if limiter:
+            # 上传限速：延迟处理（不读下一帧）→ TCP 窗口填满 → 客户端发送自然变慢
+            await limiter.acquire(n)
         try:
             await asyncio.to_thread(up.fh.write, pkt.payload)
         except OSError:
@@ -270,6 +275,9 @@ async def _stream_file(session, req_id, target, name, offset, size, digest):
             sent = offset
             while True:
                 chunk = await asyncio.to_thread(fh.read, cfg.chunk_size)
+                limiter = session.ctx.limiter_for(session.user)
+                if limiter and chunk:
+                    await limiter.acquire(len(chunk))       # 按身份限速
                 sent += len(chunk)
                 last = (not chunk) or sent >= size
                 # drain 带超时：对端不收数据超过 idle_timeout 就放弃，避免任务永远挂起
@@ -294,3 +302,40 @@ async def _stream_file(session, req_id, target, name, offset, size, digest):
         session.writer.close()
     finally:
         session.downloads.pop(req_id, None)
+
+
+# ---------------------------------------------------------------- 删除
+def _delete_path(target: str) -> int:
+    """删除文件或整个文件夹，返回删除的文件个数。符号链接只删链接本身，不会跟进去。"""
+    if os.path.islink(target) or os.path.isfile(target):
+        os.unlink(target)
+        return 1
+    count = sum(len(files) for _, _, files in os.walk(target))
+    shutil.rmtree(target)
+    return count
+
+
+async def handle_delete(session, pkt: Packet) -> None:
+    """DELETE_REQ{path} -> DELETE_RESP{ok, removed}。只能删自己目录里的内容。"""
+    R, ctx = PacketType.DELETE_RESP, session.ctx
+    try:
+        target = _resolve(session, pkt.meta.get("path"))       # 不允许空路径：删不掉用户根目录
+    except ValidationError as e:
+        await session.send(fail(R, pkt.req_id, ErrorCode.FORBIDDEN, str(e)))
+        return
+    if not os.path.lexists(target):
+        await session.send(fail(R, pkt.req_id, ErrorCode.NOT_FOUND, "文件不存在"))
+        return
+    prefix = target + os.sep
+    if any(t == target or t.startswith(prefix) for t in ctx.active_uploads):
+        await session.send(fail(R, pkt.req_id, ErrorCode.CONFLICT, "该文件正在上传，暂时不能删除"))
+        return
+    try:
+        removed = await asyncio.to_thread(_delete_path, target)
+    except OSError as e:
+        log.warning("删除失败 %s: %s", target, e)
+        await session.send(fail(R, pkt.req_id, ErrorCode.INTERNAL, "删除失败（文件可能正被使用）"))
+        return
+    log.info("删除: user=%s path=%s (%d 个文件)", session.user["username"], pkt.meta.get("path"), removed)
+    await _log_transfer(session, "delete", str(pkt.meta.get("path"))[:255], 0, None, "ok")
+    await session.send(Packet(R, pkt.req_id, {"ok": True, "removed": removed}))
