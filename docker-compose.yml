@@ -27,7 +27,7 @@ services:
     environment:
       FTP_DB_PASSWORD: ${FTP_DB_PASSWORD:?请在 .env 中设置}
     ports:
-      - "9443:9443"
+      - "19443:9443"
     volumes:
       - ftp_storage:/data/storage          # 用户文件只能落在这个卷里
       - ./certs:/certs:ro                  # 证书只读挂载
