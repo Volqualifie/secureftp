@@ -1,0 +1,1 @@
+"""PySide6 图形界面。网络与传输逻辑在 client/net.py、client/transfer.py，界面只负责展示与调度。"""

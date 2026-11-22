@@ -1,0 +1,9 @@
+.git
+certs/*.pem
+certs/*.srl
+storage
+tests
+client
+__pycache__
+*.pyc
+.env

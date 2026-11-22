@@ -28,6 +28,16 @@ class Config:
     max_concurrent_transfers: int = 4         # 单连接同时进行的传输数
 
 
+def _db_with_env(db: dict) -> dict:
+    """环境变量优先于配置文件（容器部署时密码通过环境变量/secret 传入，不写进镜像）。"""
+    db = dict(db)
+    for key, env in (("host", "FTP_DB_HOST"), ("port", "FTP_DB_PORT"), ("user", "FTP_DB_USER"),
+                     ("password", "FTP_DB_PASSWORD"), ("name", "FTP_DB_NAME")):
+        if os.environ.get(env):
+            db[key] = os.environ[env]
+    return db
+
+
 def load_config(path: str) -> Config:
     base = os.path.dirname(os.path.abspath(path))
     with open(path, encoding="utf-8") as f:
@@ -54,7 +64,7 @@ def load_config(path: str) -> Config:
         tls_key=rel(t["key"]),
         tls_ca=rel(t["ca"]),
         require_client_cert=bool(t.get("require_client_cert", False)),
-        db=raw["database"],
+        db=_db_with_env(raw["database"]),
         max_file_size=int(s.get("max_file_size", 4 * 1024 ** 3)),
         max_concurrent_transfers=int(s.get("max_concurrent_transfers", 4)),
     )

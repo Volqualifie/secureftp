@@ -5,8 +5,10 @@
   上传   : UPLOAD_REQ{path,size,sha256} [+RESUME] -> UPLOAD_RESP{offset}
            FILE_DATA × n (最后一块带 LAST 标志，可为空载荷)
                                                   -> FILE_DONE{ok,sha256}
-  下载   : DOWNLOAD_REQ{path,offset}             -> FILE_META{size,sha256,offset}
-           服务端连续推送 FILE_DATA（最后一块带 LAST）；客户端校验后可回 FILE_DONE
+  下载   : DOWNLOAD_REQ{path,offset[,expect_sha256]} -> FILE_META{size,sha256,offset}
+           服务端连续推送 FILE_DATA（最后一块带 LAST）；客户端校验后回 FILE_DONE{ok}
+           expect_sha256 与服务端当前文件不符 -> CONFLICT（续传保护）
+           客户端发 FILE_DONE{ok:false} 可中止服务端推送
 同一连接上可并发多个传输，用 ReqID 区分；每个传输占用一个 ReqID，直到结束。
 FILE_DATA / FILE_DONE 属于已建立传输的数据流，不要求每帧都带 token（连接已认证）。
 """
@@ -207,8 +209,13 @@ async def handle_file_data(session, pkt: Packet) -> None:
 
 
 async def handle_file_done(session, pkt: Packet) -> None:
-    """客户端对下载的确认。仅记录，不回复。"""
-    log.info("客户端确认 req=%s ok=%s", pkt.req_id, pkt.meta.get("ok"))
+    """客户端对下载的确认；ok=false 表示客户端放弃（取消或校验失败），服务端停止推送。不回复。"""
+    ok = pkt.meta.get("ok", True)
+    log.info("客户端确认 req=%s ok=%s", pkt.req_id, ok)
+    if not ok:
+        task = session.downloads.get(pkt.req_id)
+        if task is not None:
+            task.cancel()
 
 
 # ---------------------------------------------------------------- 下载
@@ -237,6 +244,13 @@ async def handle_download_req(session, pkt: Packet) -> None:
         return
     digest = await _file_sha256(ctx, target)
     name = os.path.basename(target)
+
+    # 断点续传安全：客户端手里的半成品对应哪个版本，必须与服务端当前文件一致，
+    # 否则拼出来的是"半个旧文件 + 半个新文件"。不一致就拒绝，客户端应从头下载。
+    expect = m.get("expect_sha256")
+    if expect is not None and expect != digest:
+        await session.send(fail(R, pkt.req_id, ErrorCode.CONFLICT, "远程文件已变化，无法续传"))
+        return
 
     # 先登记任务再发 META，避免 META 发出后客户端立刻重用 ReqID 的竞态
     task = asyncio.create_task(
